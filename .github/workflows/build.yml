@@ -1,0 +1,107 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.system }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            system: x86_64-linux
+          - os: ubuntu-24.04-arm
+            system: aarch64-linux
+          - os: macos-latest
+            system: aarch64-darwin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+
+      # Cachix is optional: without CACHIX_AUTH_TOKEN the cache steps are skipped.
+      - name: Check for Cachix credentials
+        id: cachix
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: |
+          if [ -n "$CACHIX_AUTH_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: cachix/cachix-action@v15
+        if: steps.cachix.outputs.enabled == 'true'
+        with:
+          name: ${{ vars.CACHIX_CACHE || 'grok-build' }}
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          # Only publish from main; PR builds read from the cache.
+          skipPush: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Build grok
+        run: nix build .#grok --print-build-logs
+
+      - name: Verify package contents
+        run: |
+          test -x ./result/bin/grok
+          test -x ./result/libexec/grok
+          # -s, not -f: an empty completion file would still pass an existence test.
+          test -s ./result/share/bash-completion/completions/grok.bash
+          test -s ./result/share/zsh/site-functions/_grok
+          test -s ./result/share/fish/vendor_completions.d/grok.fish
+
+      - name: Verify reported version matches the pin
+        run: |
+          expected="$(nix eval --raw .#grok.version)"
+          actual="$(./result/bin/grok --version)"
+          echo "pinned=$expected reported=$actual"
+          case "$actual" in
+            *"$expected"*) ;;
+            *) echo "::error::version mismatch: expected $expected, got $actual"; exit 1 ;;
+          esac
+
+      - name: Verify the auto-updater is disabled
+        run: grep -q 'GROK_DISABLE_AUTOUPDATER' ./result/bin/grok
+
+  flake-check:
+    name: flake check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+
+      - name: Evaluate every system's outputs
+        run: nix flake check --all-systems
+
+      - name: Check formatting
+        run: nix fmt -- --check flake.nix package.nix
+
+      - name: Lint update script
+        run: nix run nixpkgs#shellcheck -- scripts/update.sh
+
+      - name: Validate sources.json
+        run: nix run nixpkgs#jq -- -e '.version and .channel and (.platforms | length > 0)' sources.json

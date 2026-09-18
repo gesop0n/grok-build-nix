@@ -1,0 +1,68 @@
+name: Tag Release
+
+# Tags main with the pinned Grok version once its build has passed, so
+# downstream flakes can follow a specific release:
+#   inputs.grok-build-nix.url = "github:<owner>/grok-build-nix/v1.0.34";
+
+on:
+  workflow_run:
+    workflows: [Build]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+# Serialized: two overlapping runs could otherwise finish out of order and move
+# the `latest` tag back to an older commit.
+concurrency:
+  group: tag-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Read the pinned version
+        id: version
+        run: echo "version=$(jq -r '.version' sources.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create the immutable version tag
+        id: tag
+        run: |
+          set -euo pipefail
+          tag="v${{ steps.version.outputs.version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            echo "Tag $tag already exists; nothing to do."
+            exit 0
+          fi
+          git tag -a "$tag" -m "grok $tag"
+          git push origin "$tag"
+          echo "created=true" >> "$GITHUB_OUTPUT"
+
+      - name: Move the `latest` tag
+        run: |
+          set -euo pipefail
+          git tag -f -a latest -m "grok v${{ steps.version.outputs.version }}"
+          git push --force origin latest
+
+      - name: Summary
+        run: |
+          {
+            echo "## Tag"
+            echo ""
+            echo "- \`v${{ steps.version.outputs.version }}\` — ${{ steps.tag.outputs.created == 'true' && 'created' || 'already existed' }}"
+            echo "- \`latest\` → \`v${{ steps.version.outputs.version }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,122 @@
+name: Update Grok
+
+on:
+  schedule:
+    # Hourly; the upstream channel pointer can move several times a day.
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Specific version to pin (optional, defaults to the channel latest)'
+        required: false
+      channel:
+        description: 'Release channel: stable, alpha, or enterprise (empty keeps the current one)'
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-grok
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for a new release
+        id: check
+        env:
+          # Passed through the environment rather than interpolated into the
+          # script, so a dispatch input cannot inject shell.
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -n "$INPUT_VERSION" ]; then args+=(--version "$INPUT_VERSION"); fi
+          if [ -n "$INPUT_CHANNEL" ]; then args+=(--channel "$INPUT_CHANNEL"); fi
+
+          echo "current=$(jq -r '.version' sources.json)" >> "$GITHUB_OUTPUT"
+
+          rc=0
+          ./scripts/update.sh --check "${args[@]}" || rc=$?
+          case "$rc" in
+            0) echo "update_needed=false" >> "$GITHUB_OUTPUT" ;;
+            1) echo "update_needed=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::update check failed with exit code $rc"; exit "$rc" ;;
+          esac
+
+      - name: Apply the update
+        id: update
+        if: steps.check.outputs.update_needed == 'true'
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -n "$INPUT_VERSION" ]; then args+=(--version "$INPUT_VERSION"); fi
+          if [ -n "$INPUT_CHANNEL" ]; then args+=(--channel "$INPUT_CHANNEL"); fi
+
+          ./scripts/update.sh "${args[@]}"
+          echo "version=$(jq -r '.version' sources.json)" >> "$GITHUB_OUTPUT"
+          echo "channel=$(jq -r '.channel' sources.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Create pull request
+        id: pr
+        if: steps.check.outputs.update_needed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update grok to ${{ steps.update.outputs.version }}"
+          title: "chore: update grok to ${{ steps.update.outputs.version }}"
+          body: |
+            Updates Grok Build from `${{ steps.check.outputs.current }}` to `${{ steps.update.outputs.version }}`
+            on the `${{ steps.update.outputs.channel }}` channel.
+
+            - Bumped `version` in `sources.json`
+            - Re-prefetched artifact hashes for every supported platform
+            - `nix build .#grok` verified on the update runner (`x86_64-linux`)
+
+            Upstream: https://github.com/xai-org/grok-build
+
+            ---
+            *Opened automatically by the [Update Grok](../actions/workflows/update.yml) workflow.*
+          branch: update-grok-${{ steps.update.outputs.version }}
+          delete-branch: true
+          labels: |
+            dependencies
+            automated
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Grok update"
+            echo ""
+            if [ "${{ steps.check.outcome }}" != "success" ]; then
+              echo "The upstream check failed; the pin was not touched."
+            elif [ "${{ steps.update.outcome }}" = "failure" ]; then
+              echo "An update was available, but applying it failed. The pin was restored."
+            elif [ "${{ steps.check.outputs.update_needed }}" = "true" ]; then
+              echo "| | |"
+              echo "|---|---|"
+              echo "| Previous | \`${{ steps.check.outputs.current }}\` |"
+              echo "| New | \`${{ steps.update.outputs.version }}\` |"
+              echo "| Channel | \`${{ steps.update.outputs.channel }}\` |"
+              echo "| Pull request | ${{ steps.pr.outputs.pull-request-url || 'not created' }} |"
+            else
+              echo "Already up to date at \`${{ steps.check.outputs.current }}\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

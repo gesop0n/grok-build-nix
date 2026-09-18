@@ -1,0 +1,9 @@
+result
+result-*
+.direnv/
+.envrc
+*.bak
+
+# update.sh working files
+sources.json.tmp.*
+sources.json.bak.*
