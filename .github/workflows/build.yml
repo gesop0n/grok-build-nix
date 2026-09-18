@@ -48,7 +48,7 @@ jobs:
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: cachix/cachix-action@v15
+      - uses: cachix/cachix-action@v17
         if: steps.cachix.outputs.enabled == 'true'
         with:
           name: ${{ vars.CACHIX_CACHE || 'grok-build' }}
