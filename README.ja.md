@@ -166,9 +166,10 @@ inputs.grok-build-nix.packages.${pkgs.system}.default.override {
 ```
 
 [Update Grok](.github/workflows/update.yml) ワークフローがこれを毎時実行し、上流が更新
-されていれば Pull Request を作成します。続いて [Build](.github/workflows/build.yml) が
-対応する全プラットフォームでビルドとテストを行い、[Tag Release](.github/workflows/tag.yml)
-が `main` に `v<version>` タグと、移動する `latest` タグを付与します。
+されていれば Pull Request を作成して、`x86_64-linux` で `nix build` が通ればそのままマージ
+します。続いて [Build](.github/workflows/build.yml) が `main` 上で対応する全プラットフォーム
+のビルドとテストを行い、[Tag Release](.github/workflows/tag.yml) が `main` に `v<version>`
+タグと、移動する `latest` タグを付与します。
 
 ## リポジトリ構成
 
@@ -180,7 +181,7 @@ inputs.grok-build-nix.packages.${pkgs.system}.default.override {
 ├── scripts/update.sh         # sources.json を書き換えてビルドを検証する
 └── .github/workflows/
     ├── build.yml             # 対応する全プラットフォームでのビルドとテスト、flake check
-    ├── update.yml            # 毎時の上流チェックと PR 作成
+    ├── update.yml            # 毎時の上流チェックと PR の作成・マージ
     └── tag.yml               # 固定バージョンで main にタグを付与
 ```
 

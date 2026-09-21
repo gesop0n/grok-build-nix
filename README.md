@@ -164,10 +164,11 @@ the previous pin if anything fails.
 ./scripts/update.sh --channel alpha  # switch channels (stable | alpha | enterprise)
 ```
 
-The [Update Grok](.github/workflows/update.yml) workflow runs this hourly and opens a pull
-request when upstream moves. [Build](.github/workflows/build.yml) then builds and tests
-every supported platform, and [Tag Release](.github/workflows/tag.yml) tags `main` with
-`v<version>` plus a moving `latest`.
+The [Update Grok](.github/workflows/update.yml) workflow runs this hourly and, when upstream
+moves, opens a pull request and merges it once `nix build` passes on `x86_64-linux`.
+[Build](.github/workflows/build.yml) then builds and tests every supported platform on `main`,
+and [Tag Release](.github/workflows/tag.yml) tags `main` with `v<version>` plus a moving
+`latest`.
 
 ## Repository layout
 
@@ -179,7 +180,7 @@ every supported platform, and [Tag Release](.github/workflows/tag.yml) tags `mai
 ├── scripts/update.sh         # rewrites sources.json and verifies the build
 └── .github/workflows/
     ├── build.yml             # build + test on every supported platform, flake check
-    ├── update.yml            # hourly upstream check, opens a PR
+    ├── update.yml            # hourly upstream check, opens and merges a PR
     └── tag.yml               # tags main with the pinned version
 ```
 

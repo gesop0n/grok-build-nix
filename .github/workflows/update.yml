@@ -16,6 +16,8 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # Dispatching Build after the merge.
+  actions: write
 
 concurrency:
   group: update-grok
@@ -92,12 +94,49 @@ jobs:
             Upstream: https://github.com/xai-org/grok-build
 
             ---
-            *Opened automatically by the [Update Grok](../actions/workflows/update.yml) workflow.*
+            *Opened and merged automatically by the [Update Grok](../actions/workflows/update.yml) workflow.
+            The full platform build runs on `main` after the merge.*
           branch: update-grok-${{ steps.update.outputs.version }}
           delete-branch: true
           labels: |
             dependencies
             automated
+
+      - name: Merge pull request
+        if: steps.pr.outputs.pull-request-number
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.pull-request-number }}
+        run: |
+          set -euo pipefail
+          # gh merges directly only once GitHub has computed mergeability; while
+          # it is still UNKNOWN, --auto instead tries to enable auto-merge, which
+          # needs the repository's auto-merge setting.
+          for _ in $(seq 10); do
+            status=$(gh pr view "$PR_NUMBER" --json mergeStateStatus --jq '.mergeStateStatus')
+            [ "$status" != "UNKNOWN" ] && break
+            sleep 3
+          done
+          gh pr merge "$PR_NUMBER" --auto --squash --delete-branch
+
+      # A push made with GITHUB_TOKEN does not trigger other workflows, but a
+      # workflow_dispatch does, so Build (and Tag Release after it) is started
+      # explicitly, and only when a new pin actually landed.
+      - name: Build the merged pin
+        id: build
+        if: steps.pr.outputs.pull-request-number
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.pull-request-number }}
+        run: |
+          set -euo pipefail
+          # With required checks on main, --auto only queues the merge; building
+          # now would build the previous pin.
+          state=$(gh pr view "$PR_NUMBER" --json state --jq '.state')
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          if [ "$state" = "MERGED" ]; then
+            gh workflow run build.yml --ref main
+          fi
 
       - name: Summary
         if: always()
@@ -116,6 +155,7 @@ jobs:
               echo "| New | \`${{ steps.update.outputs.version }}\` |"
               echo "| Channel | \`${{ steps.update.outputs.channel }}\` |"
               echo "| Pull request | ${{ steps.pr.outputs.pull-request-url || 'not created' }} |"
+              echo "| PR state | ${{ steps.build.outputs.state || 'unknown' }} |"
             else
               echo "Already up to date at \`${{ steps.check.outputs.current }}\`."
             fi
