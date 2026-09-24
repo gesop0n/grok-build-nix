@@ -3,31 +3,29 @@ name: Tag Release
 # Tags main with the pinned Grok version once its build has passed, so
 # downstream flakes can follow a specific release:
 #   inputs.grok-build-nix.url = "github:<owner>/grok-build-nix/v1.0.34";
+#
+# Called from Build once every platform has passed, rather than chained with
+# workflow_run: a Build dispatched with GITHUB_TOKEN (by Update Grok) does not
+# emit workflow_run, so the tag would silently never be created.
 
 on:
-  workflow_run:
-    workflows: [Build]
-    types: [completed]
-    branches: [main]
-
-permissions:
-  contents: write
-
-# Serialized: two overlapping runs could otherwise finish out of order and move
-# the `latest` tag back to an older commit.
-concurrency:
-  group: tag-release
-  cancel-in-progress: false
+  workflow_call:
 
 jobs:
   tag:
-    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Serialized: two overlapping runs could otherwise finish out of order and
+    # move the `latest` tag back to an older commit.
+    concurrency:
+      group: tag-release
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.sha }}
 
       - name: Read the pinned version
         id: version
