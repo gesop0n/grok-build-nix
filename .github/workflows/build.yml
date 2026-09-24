@@ -105,3 +105,12 @@ jobs:
 
       - name: Validate sources.json
         run: nix run nixpkgs#jq -- -e '.version and .channel and (.platforms | length > 0)' sources.json
+
+  tag:
+    name: tag release
+    needs: [build, flake-check]
+    # Only a build of main is released; PR builds stop at verification.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/tag.yml
